@@ -58,7 +58,8 @@ final class Reconstructor: ObservableObject {
                 configuration.isObjectMaskingEnabled = true
                 let session = try PhotogrammetrySession(input: images, configuration: configuration)
                 self?.session = session
-                try session.process(requests: [.modelFile(url: model, detail: .reduced)]  // iOS builds "reduced" detail)
+                // iOS builds "reduced" detail models.
+                try session.process(requests: [.modelFile(url: model, detail: .reduced)])
 
                 for try await output in session.outputs {
                     guard let self else { break }
