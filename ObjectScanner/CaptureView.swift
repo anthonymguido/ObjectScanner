@@ -1,5 +1,7 @@
 import SwiftUI
 import RealityKit
+import ARKit
+import CoreMotion
 
 /// Owns the ObjectCaptureSession and mirrors its state for the guidance overlay.
 /// The session is read on a short timer, which works the same on every iOS 17+ version.
@@ -33,12 +35,29 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var passNumber = 1
     @Published private(set) var flipped = false
 
+    // Extra photos on top of Apple's automatic ones.
+    @Published var boostEnabled = true
+    @Published private(set) var extraShots = 0
+    @Published private(set) var canShoot = false
+    @Published private(set) var degreesSinceShot: Double = 0
+
     private var timer: Timer?
     private var hintChangedAt = Date.distantPast
     private var ignorePassUntil = Date.distantPast
+    private var autoDetectAt: Date?
+    private var lastExtraShot = Date.distantPast
+    private let motion = CMMotionManager()
+    private var lastMotionTimestamp: TimeInterval?
 
     /// Minimum time a hint stays on screen, so it doesn't flicker.
     private let hintHold: TimeInterval = 1.5
+    /// Boost tuning: turn at least this far, and wait at least this long, between extra photos.
+    private let boostMinDegrees: Double = 4
+    private let boostMinInterval: TimeInterval = 0.4
+    /// Stop boosting at this share of the photo limit, leaving room for Apple's own shots.
+    private let boostCeiling = 0.9
+    /// Don't add photos while one of these warnings is showing.
+    private let boostBlockers: Set<String> = ["movingTooFast", "outOfFieldOfView", "objectNotDetected", "environmentTooDark"]
 
     func start(imagesDirectory: URL, checkpointDirectory: URL) {
         guard session == nil else { return }
@@ -47,14 +66,16 @@ final class CaptureModel: ObservableObject {
         configuration.checkpointDirectory = checkpointDirectory
         s.start(imagesDirectory: imagesDirectory, configuration: configuration)
         session = s
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
+        startMotion()
     }
 
     func tearDown() {
         timer?.invalidate()
         timer = nil
+        motion.stopDeviceMotionUpdates()
         session = nil   // releases the camera and memory before reconstruction
     }
 
@@ -77,11 +98,46 @@ final class CaptureModel: ObservableObject {
         startNextPass()
     }
 
+    /// Manual shutter.
+    func takePhoto() {
+        guard canShoot else { return }
+        shoot()
+    }
+
     private func startNextPass() {
         passNumber += 1
         passCompleted = false
         ignorePassUntil = Date().addingTimeInterval(1)
         hint = nil
+    }
+
+    private func shoot() {
+        session?.requestImageCapture()
+        extraShots += 1
+        lastExtraShot = Date()
+        degreesSinceShot = 0
+    }
+
+    // MARK: Motion (how far the phone has turned since the last extra photo)
+
+    private func startMotion() {
+        guard motion.isDeviceMotionAvailable, !motion.isDeviceMotionActive else { return }
+        motion.deviceMotionUpdateInterval = 1.0 / 30
+        lastMotionTimestamp = nil
+        motion.startDeviceMotionUpdates(to: .main) { [weak self] data, _ in
+            guard let data else { return }
+            MainActor.assumeIsolated { self?.accumulate(data) }
+        }
+    }
+
+    private func accumulate(_ data: CMDeviceMotion) {
+        defer { lastMotionTimestamp = data.timestamp }
+        guard let last = lastMotionTimestamp else { return }
+        let dt = data.timestamp - last
+        guard dt > 0, dt < 0.5 else { return }
+        let r = data.rotationRate
+        let radiansPerSecond = (r.x * r.x + r.y * r.y + r.z * r.z).squareRoot()
+        degreesSinceShot += radiansPerSecond * dt * 180 / .pi
     }
 
     // MARK: Polling
@@ -90,10 +146,19 @@ final class CaptureModel: ObservableObject {
         guard let s = session else { return }
 
         let newPhase = Self.phase(for: s.state)
-        if newPhase != phase { phase = newPhase }
+        if newPhase != phase {
+            // Entering "ready" (at the start and after a flip): look for the object by itself.
+            if newPhase == .ready { autoDetectAt = Date().addingTimeInterval(0.6) }
+            phase = newPhase
+        }
+        if phase == .ready, let at = autoDetectAt, Date() >= at {
+            autoDetectAt = nil
+            continueToDetecting()
+        }
 
         if s.numberOfShotsTaken != shots { shots = s.numberOfShotsTaken }
         if s.maximumNumberOfInputImages != maxShots { maxShots = s.maximumNumberOfInputImages }
+        if s.canRequestImageCapture != canShoot { canShoot = s.canRequestImageCapture }
 
         if Date() >= ignorePassUntil {
             let done = s.userCompletedScanPass
@@ -104,6 +169,16 @@ final class CaptureModel: ObservableObject {
         let names = s.feedback.map { String(describing: $0) }.sorted()
         if names != feedbackNames { feedbackNames = names }
         updateHint()
+        boostIfUseful()
+    }
+
+    private func boostIfUseful() {
+        guard boostEnabled, phase == .capturing, !passCompleted, canShoot else { return }
+        guard degreesSinceShot >= boostMinDegrees,
+              Date().timeIntervalSince(lastExtraShot) >= boostMinInterval else { return }
+        guard maxShots == 0 || Double(shots) < Double(maxShots) * boostCeiling else { return }
+        guard !feedbackNames.contains(where: { boostBlockers.contains($0) }) else { return }
+        shoot()
     }
 
     private func updateHint() {
@@ -130,7 +205,8 @@ final class CaptureModel: ObservableObject {
     }
 }
 
-/// Full-screen capture: Apple's camera view plus our step banner, live hints, progress and controls.
+/// Full-screen capture. First our "find object" step (border tracing + LiDAR), then Apple's
+/// Object Capture with our step banner, live hints, progress and controls on top.
 struct CaptureView: View {
     @EnvironmentObject private var store: ScanStore
     @Environment(\.dismiss) private var dismiss
@@ -138,7 +214,11 @@ struct CaptureView: View {
     let scanID: UUID
     var onComplete: (UUID) -> Void
 
+    private enum Stage { case finding, handoff, capture }
+
     @StateObject private var model = CaptureModel()
+    @StateObject private var finder = ObjectFinder()
+    @State private var stage: Stage = .finding
     @State private var showDebug = false
     @State private var confirmCancel = false
     @State private var closing = false
@@ -147,33 +227,26 @@ struct CaptureView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let session = model.session {
-                if model.passCompleted {
-                    ObjectCapturePointCloudView(session: session)
-                        .ignoresSafeArea()
-                } else {
-                    ObjectCaptureView(session: session)
-                        .ignoresSafeArea()
-                }
-            } else if case .failed = model.phase {
-                EmptyView()
-            } else {
+            switch stage {
+            case .finding:
+                finderLayer
+            case .handoff:
                 ProgressView().tint(.white)
+            case .capture:
+                captureLayer
             }
 
             VStack(spacing: 10) {
                 topBar
                 StepBanner(text: bannerText)
-                if let hint = visibleHint { HintPill(hint: hint) }
-                if showDebug {
-                    CaptureDebugPanel(phase: model.phase.debugName, feedback: model.feedbackNames,
-                                      shots: model.shots, maxShots: model.maxShots,
-                                      pass: model.passNumber, completedPasses: model.completedPasses,
-                                      passCompleted: model.passCompleted, flipped: model.flipped)
+                if stage == .finding, finder.objectFound {
+                    FinderReadout(distance: finder.distance, sizeCM: finder.sizeCM)
                 }
+                if stage == .capture, let hint = visibleHint { HintPill(hint: hint) }
+                if showDebug { debugPanel }
                 Spacer()
-                if showsProgress {
-                    CaptureProgressLine(shots: model.shots, maxShots: model.maxShots,
+                if stage == .capture, showsProgress {
+                    CaptureProgressLine(shots: model.shots, maxShots: model.maxShots, extra: model.extraShots,
                                         pass: model.passNumber, completedPasses: model.completedPasses,
                                         flipped: model.flipped)
                 }
@@ -185,12 +258,19 @@ struct CaptureView: View {
         .statusBarHidden()
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
-            model.start(imagesDirectory: store.imagesURL(for: scanID),
-                        checkpointDirectory: store.checkpointURL(for: scanID))
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                finder.start()
+            } else {
+                beginCapture(after: 0)
+            }
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
+            finder.stop()
             model.tearDown()
+        }
+        .onChange(of: finder.isReady) { _, ready in
+            if ready && stage == .finding { beginCapture(after: 0.8) }
         }
         .onChange(of: model.phase) { _, phase in
             switch phase {
@@ -205,6 +285,57 @@ struct CaptureView: View {
         } message: {
             Text("The photos taken so far will be deleted.")
         }
+    }
+
+    // MARK: Layers
+
+    /// Camera feed with the traced border. Tap an object to pick it.
+    private var finderLayer: some View {
+        GeometryReader { geo in
+            ZStack {
+                FinderCameraView(session: finder.session)
+                FinderOutline(outline: finder.outline, ready: finder.isReady)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(coordinateSpace: .local) { point in
+                        if let p = imagePoint(for: point, in: geo.size) { finder.select(at: p) }
+                    }
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var captureLayer: some View {
+        if let session = model.session {
+            if model.passCompleted {
+                ObjectCapturePointCloudView(session: session)
+                    .ignoresSafeArea()
+            } else {
+                ObjectCaptureView(session: session)
+                    .ignoresSafeArea()
+            }
+        } else if case .failed = model.phase {
+            EmptyView()
+        } else {
+            ProgressView().tint(.white)
+        }
+    }
+
+    /// Converts a tap on the full-screen camera view to normalized image coordinates,
+    /// undoing the aspect-fill crop the camera feed uses.
+    private func imagePoint(for point: CGPoint, in size: CGSize) -> CGPoint? {
+        let image = finder.imageSize
+        guard image.width > 0, image.height > 0, size.width > 0, size.height > 0 else { return nil }
+        let scale = max(size.width / image.width, size.height / image.height)
+        let shown = CGSize(width: image.width * scale, height: image.height * scale)
+        let origin = CGPoint(x: (size.width - shown.width) / 2, y: (size.height - shown.height) / 2)
+        let u = (point.x - origin.x) / shown.width
+        let v = (point.y - origin.y) / shown.height
+        guard (0...1).contains(u), (0...1).contains(v) else { return nil }
+        return CGPoint(x: u, y: v)
     }
 
     // MARK: Pieces
@@ -233,7 +364,50 @@ struct CaptureView: View {
         .padding(.top, 4)
     }
 
+    private var debugPanel: some View {
+        VStack(spacing: 6) {
+            switch stage {
+            case .finding, .handoff:
+                CaptureDebugPanel(phase: "finding", feedback: [], shots: 0, maxShots: 0, pass: 1,
+                                  completedPasses: 0, passCompleted: false, flipped: false,
+                                  extraLines: finderDebugLines)
+            case .capture:
+                CaptureDebugPanel(phase: model.phase.debugName, feedback: model.feedbackNames,
+                                  shots: model.shots, maxShots: model.maxShots,
+                                  pass: model.passNumber, completedPasses: model.completedPasses,
+                                  passCompleted: model.passCompleted, flipped: model.flipped,
+                                  extraLines: [
+                                    "boost: \(model.boostEnabled ? "on" : "off")  extra: \(model.extraShots)  canShoot: \(model.canShoot ? "yes" : "no")",
+                                    String(format: "turned since last extra: %.1f°", model.degreesSinceShot),
+                                  ])
+                Toggle("Boost photos", isOn: $model.boostEnabled)
+                    .font(.footnote)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    private var finderDebugLines: [String] {
+        [
+            "instances: \(finder.instanceCount)  found: \(finder.objectFound ? "yes" : "no")  centered: \(finder.isCentered ? "yes" : "no")",
+            "distance: \(finder.distance.map { String(format: "%.2f m", $0) } ?? "–")  size: \(finder.sizeCM.map { String(format: "%.0f×%.0f cm", $0.width, $0.height) } ?? "–")",
+            "tracking: \(finder.trackingNormal ? "normal" : "limited")  ready: \(finder.isReady ? "yes" : "no")",
+        ]
+    }
+
     private var bannerText: String {
+        switch stage {
+        case .finding:
+            return GuidanceText.finder(found: finder.objectFound, instances: finder.instanceCount,
+                                       centered: finder.isCentered, tracking: finder.trackingNormal,
+                                       distance: finder.distance, sizeCM: finder.sizeCM, ready: finder.isReady)
+        case .handoff:
+            return GuidanceText.handoff
+        case .capture:
+            break
+        }
         switch model.phase {
         case .initializing:
             return GuidanceText.starting
@@ -274,6 +448,18 @@ struct CaptureView: View {
 
     @ViewBuilder
     private var controls: some View {
+        switch stage {
+        case .finding:
+            secondary("Skip, let the scanner find it", systemImage: "forward") { beginCapture(after: 0) }
+        case .handoff:
+            EmptyView()
+        case .capture:
+            captureControls
+        }
+    }
+
+    @ViewBuilder
+    private var captureControls: some View {
         switch model.phase {
         case .initializing:
             EmptyView()
@@ -294,8 +480,18 @@ struct CaptureView: View {
                     primary("Done", systemImage: "checkmark") { model.finish() }
                 }
             } else {
-                secondary("Finish now", systemImage: "stop.circle") { model.finish() }
-                    .disabled(model.shots == 0)
+                HStack {
+                    secondary("Finish now", systemImage: "stop.circle") { model.finish() }
+                        .disabled(model.shots == 0)
+                    Button { model.takePhoto() } label: {
+                        Image(systemName: "camera.circle.fill")
+                            .font(.system(size: 52))
+                            .foregroundStyle(.white, .black.opacity(0.4))
+                    }
+                    .disabled(!model.canShoot)
+                    .opacity(model.canShoot ? 1 : 0.4)
+                    .accessibilityLabel("Take a photo")
+                }
             }
         case .finishing, .completed:
             ProgressView().tint(.white).padding()
@@ -323,6 +519,22 @@ struct CaptureView: View {
     }
 
     // MARK: Outcomes
+
+    /// Hands the camera from the finder to Object Capture. Only one AR session can run at a time.
+    private func beginCapture(after delay: TimeInterval) {
+        guard stage == .finding else { return }
+        stage = .handoff
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            finder.stop()
+            // Give ARKit a moment to release the camera before Object Capture opens it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                guard !closing else { return }
+                stage = .capture
+                model.start(imagesDirectory: store.imagesURL(for: scanID),
+                            checkpointDirectory: store.checkpointURL(for: scanID))
+            }
+        }
+    }
 
     private func complete() {
         guard !closing else { return }
@@ -354,6 +566,7 @@ struct CaptureView: View {
 
     private func discard() {
         closing = true
+        finder.stop()
         model.cancel()
         model.tearDown()
         store.delete(id: scanID)

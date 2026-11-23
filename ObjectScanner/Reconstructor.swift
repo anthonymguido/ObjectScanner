@@ -61,7 +61,9 @@ final class Reconstructor: ObservableObject {
                 // iOS builds "reduced" detail models.
                 try session.process(requests: [.modelFile(url: model, detail: .reduced)])
 
-                for try await output in session.outputs {
+                // The outputs stream does not end by itself after processing finishes,
+                // so leave the loop on .processingComplete / .processingCancelled.
+                outputLoop: for try await output in session.outputs {
                     guard let self else { break }
                     switch output {
                     case .requestProgress(_, let fractionComplete):
@@ -70,12 +72,16 @@ final class Reconstructor: ObservableObject {
                         self.secondsRemaining = info.estimatedRemainingTime
                     case .inputComplete:
                         self.stage = "Building the 3D model…"
+                    case .requestComplete(_, _):
+                        self.fraction = 1
+                        self.stage = "Saving model…"
                     case .requestError(_, let error):
                         failure = error.localizedDescription
                     case .processingCancelled:
                         cancelled = true
+                        break outputLoop
                     case .processingComplete:
-                        self.stage = "Finishing…"
+                        break outputLoop
                     default:
                         break
                     }

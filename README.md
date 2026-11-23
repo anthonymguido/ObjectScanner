@@ -56,19 +56,24 @@ the same `.ipa`. Your scans are kept.
 ## Scanning
 
 1. **+** → name the object → **Start**.
-2. Follow the instructions at the top of the screen:
-   - **Continue**: point at the object.
-   - Fit the box around it, then **Start capture**.
-   - Walk slowly all the way around. The ring fills in as you cover each side.
-   - When a pass is done, choose **Another pass** (go around from a lower or higher angle),
-     **Flip object** (lay it on its side to capture the bottom), or **Done**.
-3. The yellow hint under the instructions tells you what to fix: too close, too far,
+2. **Find the object:** point the camera at it. A glowing outline traces its border (the same
+   feature Photos uses to lift a subject). Tap a different object to switch. The readout shows
+   its distance and size from LiDAR. When it's centered, 0.3–1.5 m away and 5–120 cm big, the outline
+   turns green and the scan starts by itself. **Skip** goes straight to Apple's own detection.
+3. The scan box appears around the object on its own (tap **Continue** if it doesn't).
+   Adjust it if needed, then **Start capture**.
+4. Walk slowly all the way around, about one step a second. The app takes extra photos as you
+   turn, on top of the automatic ones, and the camera button takes one by hand.
+5. When a pass is done, choose **Another pass** (go around from a lower or higher angle),
+   **Flip object** (lay it on its side to capture the bottom), or **Done**.
+6. The yellow hint under the instructions tells you what to fix: too close, too far,
    too fast, too dark, or the object is out of view. Green means it's going well.
-4. On the scan's page, tap **Build 3D model**. Keep the app open and the phone unlocked.
+7. On the scan's page, tap **Build 3D model**. Keep the app open and the phone unlocked.
    It usually takes a few minutes.
-5. **View in 3D / AR** to inspect it, **Share model** to export the `.usdz`.
+8. **View in 3D / AR** to inspect it, **Share model** to export the `.usdz`.
 
-The ladybug button on the capture screen shows the raw scanner state for testing.
+The ladybug button on the capture screen shows the raw scanner state for testing, including the
+finder's readings and an on/off switch for the extra photos.
 
 ### Tips for good models
 - Objects about the size of a shoe up to a chair work best.

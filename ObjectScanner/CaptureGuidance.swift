@@ -6,15 +6,46 @@ enum GuidanceText {
     // MARK: Step banner (what to do now)
 
     static let starting = "Starting the camera…"
-    static let ready = "Put the object on a plain table with space to walk around it. Point the camera at it, then tap Continue."
-    static let readyAfterFlip = "Object flipped. Point the camera at it again, then tap Continue."
+    static let ready = "Point the camera at the object. The scan box should appear by itself. If it doesn't, tap Continue."
+    static let readyAfterFlip = "Object flipped. Point the camera at it again. The box should appear by itself."
+    static let handoff = "Object found ✓ Starting scan…"
+
+    // MARK: Find-object step (border tracing + LiDAR)
+
+    static func finder(found: Bool, instances: Int, centered: Bool, tracking: Bool,
+                       distance: Float?, sizeCM: CGSize?, ready: Bool) -> String {
+        if ready { return handoff }
+        if !tracking { return "Move the phone slowly so it can get its bearings." }
+        if !found {
+            return instances == 0
+                ? "Point the camera at the object. Put it on a plain surface with space around it."
+                : "Tap the object you want to scan."
+        }
+        if let d = distance {
+            if d > ObjectFinder.distanceRange.upperBound { return String(format: "Move closer (%.1f m away).", d) }
+            if d < ObjectFinder.distanceRange.lowerBound { return String(format: "Step back a little (%.0f cm away).", d * 100) }
+        } else {
+            return "Measuring distance… keep the object in view."
+        }
+        if let s = sizeCM {
+            let longest = max(s.width, s.height)
+            if longest < ObjectFinder.minSizeCM {
+                return String(format: "Object looks very small (%.0f cm). Objects under %.0f cm scan poorly. Move closer.", longest, ObjectFinder.minSizeCM)
+            }
+            if longest > ObjectFinder.maxSizeCM {
+                return String(format: "Object looks very large (%.0f cm). Step back or pick something smaller.", longest)
+            }
+        }
+        if !centered { return "Center the object on the screen." }
+        return "Hold still…"
+    }
     static let detecting = "A box appears around the object. Drag its edges so it fits snugly, then tap Start capture."
     static let finishing = "Saving photos… keep the app open."
     static let completed = "Capture complete."
 
     static func capturing(pass: Int) -> String {
         switch pass {
-        case 1: return "Walk slowly all the way around the object, keeping it in the middle of the screen."
+        case 1: return "Walk slowly all the way around the object (about one step a second), keeping it in the middle of the screen."
         case 2: return "Pass 2: go around again with the phone lower, looking slightly up at the object."
         default: return "Pass \(pass): go around once more from a different height."
         }
@@ -65,6 +96,43 @@ enum GuidanceText {
 
 // MARK: - Overlay pieces
 
+/// Glowing border around the object the finder picked. Fills the screen the same way the camera feed does.
+struct FinderOutline: View {
+    let outline: CGImage?
+    let ready: Bool
+
+    var body: some View {
+        if let outline {
+            Image(decorative: outline, scale: 1)
+                .resizable()
+                .interpolation(.medium)
+                .scaledToFill()
+                .colorMultiply(ready ? .green : .white)
+                .shadow(color: ready ? .green : .cyan, radius: 8)
+                .shadow(color: ready ? .green : .cyan, radius: 3)
+                .allowsHitTesting(false)
+                .animation(.easeInOut(duration: 0.15), value: ready)
+        }
+    }
+}
+
+/// Distance and size readout under the banner while finding the object.
+struct FinderReadout: View {
+    let distance: Float?
+    let sizeCM: CGSize?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let distance { Label(String(format: "%.2f m", distance), systemImage: "ruler") }
+            if let sizeCM { Label(String(format: "%.0f × %.0f cm", sizeCM.width, sizeCM.height), systemImage: "cube") }
+        }
+        .font(.footnote.monospacedDigit().weight(.semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.black.opacity(0.5), in: Capsule())
+    }
+}
+
 /// The "what to do now" instruction across the top of the capture screen.
 struct StepBanner: View {
     let text: String
@@ -100,6 +168,7 @@ struct HintPill: View {
 struct CaptureProgressLine: View {
     let shots: Int
     let maxShots: Int
+    let extra: Int
     let pass: Int
     let completedPasses: Int
     let flipped: Bool
@@ -107,7 +176,8 @@ struct CaptureProgressLine: View {
     var body: some View {
         VStack(spacing: 6) {
             HStack {
-                Label(maxShots > 0 ? "\(shots) / \(maxShots) photos" : "\(shots) photos", systemImage: "camera")
+                Label((maxShots > 0 ? "\(shots) / \(maxShots) photos" : "\(shots) photos") + (extra > 0 ? " (\(extra) extra)" : ""),
+                      systemImage: "camera")
                 Spacer()
                 Text("Pass \(pass) of 3 suggested")
             }
@@ -141,6 +211,7 @@ struct CaptureDebugPanel: View {
     let completedPasses: Int
     let passCompleted: Bool
     let flipped: Bool
+    var extraLines: [String] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -148,6 +219,7 @@ struct CaptureDebugPanel: View {
             Text("feedback: \(feedback.isEmpty ? "none" : feedback.joined(separator: ", "))")
             Text("shots: \(shots)/\(maxShots)  pass: \(pass)  done passes: \(completedPasses)")
             Text("passComplete: \(passCompleted ? "yes" : "no")  flipped: \(flipped ? "yes" : "no")")
+            ForEach(extraLines, id: \.self) { Text($0) }
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(.green)
