@@ -6,7 +6,7 @@ struct ObjectScannerApp: App {
     @StateObject private var store = ScanStore()
     @StateObject private var reconstructor = Reconstructor()
 
-    var body: some Scene {
+    var body: some SwiftUI.Scene {   // RealityKit also has a Scene type
         WindowGroup {
             ScanListView()
                 .environmentObject(store)

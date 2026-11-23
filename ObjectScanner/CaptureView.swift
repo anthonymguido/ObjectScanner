@@ -45,12 +45,7 @@ final class CaptureModel: ObservableObject {
         let s = ObjectCaptureSession()
         var configuration = ObjectCaptureSession.Configuration()
         configuration.checkpointDirectory = checkpointDirectory
-        do {
-            try s.start(imagesDirectory: imagesDirectory, configuration: configuration)
-        } catch {
-            phase = .failed(error.localizedDescription)
-            return
-        }
+        s.start(imagesDirectory: imagesDirectory, configuration: configuration)
         session = s
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
