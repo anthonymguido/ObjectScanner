@@ -1,0 +1,20 @@
+# Generated into an Xcode project by XcodeGen (the GitHub build does this for you).
+name: ObjectScanner
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    GENERATE_INFOPLIST_FILE: NO
+targets:
+  ObjectScanner:
+    type: application
+    platform: iOS
+    sources: [ObjectScanner]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ObjectScanner
+        INFOPLIST_FILE: ObjectScanner/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
