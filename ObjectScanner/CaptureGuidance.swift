@@ -67,9 +67,25 @@ enum GuidanceText {
     struct Hint: Equatable {
         let text: String
         let isWarning: Bool
+        /// Tapping the hint opens the tracking tips.
+        var showsTips = false
     }
 
     static let lookingGood = Hint(text: "Looking good. Keep going", isWarning: false)
+
+    /// Camera tracking problems, shown before any other hint because photos taken
+    /// while tracking slips line up badly in the model.
+    static let trackingHints: [String: Hint] = [
+        "insufficientFeatures": Hint(text: "Tracking is weak. Add texture around the object: the scan mat or tape marks. Tap for tips.",
+                                     isWarning: true, showsTips: true),
+        "excessiveMotion": Hint(text: "Slow down. Tracking is slipping.", isWarning: true),
+        "relocalizing": Hint(text: "Tracking lost. Point back at where you were and hold still.", isWarning: true, showsTips: true),
+        "initializing": Hint(text: "Getting its bearings… move the phone slowly.", isWarning: true),
+        "notAvailable": Hint(text: "Tracking lost. Point back at where you were and hold still.", isWarning: true, showsTips: true),
+        "limited": Hint(text: "Tracking is weak. Move slowly and keep the object in view. Tap for tips.", isWarning: true, showsTips: true),
+    ]
+
+    static let nearPhotoLimit = Hint(text: "Near the photo limit. Lower the photo rate or finish this pass.", isWarning: true)
 
     /// Feedback names as the session reports them, highest priority first.
     /// Names are matched as text so a feedback type missing on some iOS version can't break the build.
@@ -86,10 +102,12 @@ enum GuidanceText {
     ]
 
     /// The most important hint for the current feedback, or nil if there's nothing to warn about.
-    static func topHint(for feedbackNames: [String]) -> Hint? {
+    static func topHint(for feedbackNames: [String], tracking: String = "normal", nearPhotoLimit: Bool = false) -> Hint? {
+        if tracking != "normal", let hint = trackingHints[tracking] { return hint }
         for entry in feedbackHints where feedbackNames.contains(entry.name) {
             return Hint(text: entry.text, isWarning: true)
         }
+        if nearPhotoLimit { return Self.nearPhotoLimit }
         return nil
     }
 }
@@ -161,6 +179,32 @@ struct HintPill: View {
             .background(hint.isWarning ? Color.yellow : Color.green.opacity(0.85), in: Capsule())
             .transition(.opacity.combined(with: .scale(scale: 0.95)))
             .id(hint.text)
+    }
+}
+
+/// Extra-photo switch and rate slider, shown while capturing.
+struct PhotoRateControl: View {
+    @Binding var enabled: Bool
+    @Binding var rate: Double
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Toggle(isOn: $enabled) {
+                Image(systemName: enabled ? "camera.badge.ellipsis" : "camera")
+            }
+            .toggleStyle(.button)
+            .accessibilityLabel("Extra photos")
+            Text("Fewer").font(.caption2)
+            Slider(value: $rate, in: 0...1)
+                .disabled(!enabled)
+                .accessibilityLabel("Photo rate")
+            Text("More").font(.caption2)
+        }
+        .foregroundStyle(.white)
+        .tint(.white)
+        .padding(.horizontal, 10).padding(.vertical, 4)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .opacity(enabled ? 1 : 0.7)
     }
 }
 

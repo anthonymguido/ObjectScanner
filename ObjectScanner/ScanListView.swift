@@ -8,6 +8,7 @@ struct ScanListView: View {
     @State private var naming = false
     @State private var newName = ""
     @State private var capturing: CaptureTarget?
+    @State private var showSettings = false
 
     private struct CaptureTarget: Identifiable { let id: UUID }
 
@@ -33,6 +34,10 @@ struct ScanListView: View {
             .navigationTitle("Object Scanner")
             .navigationDestination(for: UUID.self) { ScanDetailView(scanID: $0) }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                        .accessibilityLabel("Settings")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { startNaming() } label: { Image(systemName: "plus") }
                         .disabled(!canCapture)
@@ -49,6 +54,7 @@ struct ScanListView: View {
             } message: {
                 Text("Name the object you're about to scan.")
             }
+            .sheet(isPresented: $showSettings) { SettingsView() }
             .fullScreenCover(item: $capturing) { target in
                 CaptureView(scanID: target.id) { id in
                     // Open the new scan once the camera screen has gone.

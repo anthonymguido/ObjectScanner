@@ -53,6 +53,10 @@ struct Scan: Identifiable, Codable, Hashable {
     var passes = 0
     var flipped = false
     var errorMessage: String?
+    /// How the current model was built, e.g. "Balanced".
+    var builtQuality: String?
+    /// Something to know about the last build, e.g. that Best fell back to standard detail.
+    var buildNote: String?
 
     init(name: String) {
         self.name = name
@@ -70,5 +74,7 @@ struct Scan: Identifiable, Codable, Hashable {
         passes = try c.decodeIfPresent(Int.self, forKey: .passes) ?? 0
         flipped = try c.decodeIfPresent(Bool.self, forKey: .flipped) ?? false
         errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        builtQuality = try c.decodeIfPresent(String.self, forKey: .builtQuality)
+        buildNote = try c.decodeIfPresent(String.self, forKey: .buildNote)
     }
 }

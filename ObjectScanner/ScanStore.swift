@@ -60,6 +60,13 @@ final class ScanStore: ObservableObject {
     func imagesURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("Images", isDirectory: true) }
     func checkpointURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("Checkpoint", isDirectory: true) }
     func modelURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("model.usdz") }
+    func pointCloudURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("pointcloud.ply") }
+    func posesURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("poses.json") }
+
+    /// True when the point cloud and poses for an export already exist.
+    func hasExportData(_ id: UUID) -> Bool {
+        fm.fileExists(atPath: pointCloudURL(for: id).path) && fm.fileExists(atPath: posesURL(for: id).path)
+    }
 
     func hasModel(_ id: UUID) -> Bool { fm.fileExists(atPath: modelURL(for: id).path) }
 
@@ -77,6 +84,7 @@ final class ScanStore: ObservableObject {
         try? fm.removeItem(at: imagesURL(for: id))
         try? fm.removeItem(at: checkpointURL(for: id))
         try? fm.createDirectory(at: imagesURL(for: id), withIntermediateDirectories: true)
+        // The point cloud and poses are kept: they're small and still useful in an export.
         mutate(id) { $0.imageCount = 0 }
     }
 

@@ -10,6 +10,9 @@ struct ScanDetailView: View {
     @State private var sharing = false
     @State private var confirmDeletePhotos = false
     @State private var sizeText = ""
+    @AppStorage(AppSettings.Key.buildQuality) private var quality = BuildQuality.fast
+    @State private var exporting = false
+    @State private var exportError: String?
 
     private var scan: Scan? { store.scan(scanID) }
     private var isBuildingThis: Bool { reconstructor.activeScanID == scanID }
@@ -32,6 +35,17 @@ struct ScanDetailView: View {
                     LabeledContent("Photos", value: "\(scan.imageCount)")
                     LabeledContent("Passes", value: "\(scan.passes)\(scan.flipped ? " (incl. flipped)" : "")")
                     LabeledContent("Storage used", value: sizeText.isEmpty ? "…" : sizeText)
+                    if let built = scan.builtQuality, store.hasModel(scanID) {
+                        LabeledContent("Built with", value: built)
+                    }
+                }
+
+                if let note = scan.buildNote, store.hasModel(scanID), !isBuildingThis {
+                    Section {
+                        Label(note, systemImage: "info.circle")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if let error = scan.errorMessage, !isBuildingThis {
@@ -47,6 +61,7 @@ struct ScanDetailView: View {
                 }
 
                 modelSection(scan)
+                exportSection(scan)
                 photosSection(scan)
             }
             .navigationTitle(scan.name)
@@ -85,9 +100,9 @@ struct ScanDetailView: View {
             }
             Button("Cancel build", role: .destructive) { reconstructor.cancel() }
         } header: {
-            Text("Building 3D model")
+            Text(reconstructor.exportDataOnly ? "Preparing export" : "Building 3D model")
         } footer: {
-            Text("Keep the app open and the phone unlocked until this finishes. It usually takes a few minutes.")
+            Text("Keep the app open and the phone unlocked until this finishes. It can take a few minutes, longer at higher quality.")
         }
     }
 
@@ -105,7 +120,12 @@ struct ScanDetailView: View {
                 }
             }
             if hasPhotos && !isBuildingThis {
-                Button { reconstructor.build(scanID, store: store) } label: {
+                Picker("Quality", selection: $quality) {
+                    ForEach(BuildQuality.allCases) { Text($0.title).tag($0) }
+                }
+                Text(quality.summary)
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button { reconstructor.build(scanID, store: store, quality: quality) } label: {
                     Label(hasModel ? "Rebuild model" : (scan.status == .failed || scan.errorMessage != nil ? "Try building again" : "Build 3D model"),
                           systemImage: "cube.transparent")
                 }
@@ -118,6 +138,28 @@ struct ScanDetailView: View {
             if !hasModel && !hasPhotos {
                 Text("No photos or model. Delete this scan and try again.")
                     .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func exportSection(_ scan: Scan) -> some View {
+        if scan.imageCount > 0 && !isBuildingThis {
+            Section {
+                Button { exportData() } label: {
+                    HStack {
+                        Label("Export scan data (.zip)", systemImage: "shippingbox")
+                        if exporting { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(exporting || reconstructor.isRunning)
+                if let exportError {
+                    Text(exportError).font(.footnote).foregroundStyle(.red)
+                }
+            } header: {
+                Text("Export for a computer")
+            } footer: {
+                Text("Photos, LiDAR depth maps, the 3D point cloud (.ply), camera positions and the model, to build a more detailed model on a PC or Mac.\(store.hasExportData(scanID) ? "" : " The point cloud is made first, which takes a minute or two.")")
             }
         }
     }
@@ -137,6 +179,40 @@ struct ScanDetailView: View {
         guard let url = store.shareableModelURL(for: scanID) else { return }
         shareItems = [url]
         sharing = true
+    }
+
+    private func exportData() {
+        exportError = nil
+        if store.hasExportData(scanID) {
+            packExport()
+        } else {
+            exporting = true
+            reconstructor.makeExportData(scanID, store: store) { cancelled in
+                // If the point cloud couldn't be made, the zip goes without it and its README says so.
+                if cancelled { exporting = false } else { packExport() }
+            }
+        }
+    }
+
+    private func packExport() {
+        guard let scan else { return }
+        exporting = true
+        let input = ScanExporter.Input(name: scan.name,
+                                       imageFiles: store.imageFiles(for: scanID),
+                                       pointCloud: store.pointCloudURL(for: scanID),
+                                       poses: store.posesURL(for: scanID),
+                                       model: store.modelURL(for: scanID))
+        Task {
+            do {
+                let zip = try await ScanExporter.export(input)
+                exporting = false
+                shareItems = [zip]
+                sharing = true
+            } catch {
+                exporting = false
+                exportError = "Export failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func refreshSize() {

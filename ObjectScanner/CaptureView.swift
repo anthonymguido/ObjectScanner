@@ -36,10 +36,22 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var flipped = false
 
     // Extra photos on top of Apple's automatic ones.
-    @Published var boostEnabled = true
+    @Published var boostEnabled = AppSettings.boostEnabled {
+        didSet { AppSettings.boostEnabled = boostEnabled }
+    }
+    /// 0…1, how often extra photos are taken. Saved between scans.
+    @Published var photoRate = AppSettings.photoRate {
+        didSet { AppSettings.photoRate = photoRate }
+    }
     @Published private(set) var extraShots = 0
     @Published private(set) var canShoot = false
     @Published private(set) var degreesSinceShot: Double = 0
+    /// Camera tracking as text: "normal", "insufficientFeatures", "excessiveMotion", "relocalizing", ...
+    @Published private(set) var tracking = "normal"
+
+    var trackingNormal: Bool { tracking == "normal" }
+    /// True when the photo count is close to Apple's per-scan limit.
+    var nearPhotoLimit: Bool { maxShots > 0 && Double(shots) >= Double(maxShots) * photoLimitWarning }
 
     private var timer: Timer?
     private var hintChangedAt = Date.distantPast
@@ -51,11 +63,13 @@ final class CaptureModel: ObservableObject {
 
     /// Minimum time a hint stays on screen, so it doesn't flicker.
     private let hintHold: TimeInterval = 1.5
-    /// Boost tuning: turn at least this far, and wait at least this long, between extra photos.
-    private let boostMinDegrees: Double = 4
-    private let boostMinInterval: TimeInterval = 0.4
+    /// Boost tuning comes from the photo rate: turn at least this far, and wait at least this long, between extra photos.
+    private var boostMinDegrees: Double { AppSettings.boostDegrees(rate: photoRate) }
+    private var boostMinInterval: TimeInterval { AppSettings.boostInterval(rate: photoRate) }
     /// Stop boosting at this share of the photo limit, leaving room for Apple's own shots.
     private let boostCeiling = 0.9
+    /// Warn at this share of the photo limit.
+    private let photoLimitWarning = 0.8
     /// Don't add photos while one of these warnings is showing.
     private let boostBlockers: Set<String> = ["movingTooFast", "outOfFieldOfView", "objectNotDetected", "environmentTooDark"]
 
@@ -138,6 +152,8 @@ final class CaptureModel: ObservableObject {
         let r = data.rotationRate
         let radiansPerSecond = (r.x * r.x + r.y * r.y + r.z * r.z).squareRoot()
         degreesSinceShot += radiansPerSecond * dt * 180 / .pi
+        // Checked here too (30 times a second), so the 0.2 s poll doesn't cap high photo rates.
+        boostIfUseful()
     }
 
     // MARK: Polling
@@ -168,12 +184,16 @@ final class CaptureModel: ObservableObject {
 
         let names = s.feedback.map { String(describing: $0) }.sorted()
         if names != feedbackNames { feedbackNames = names }
+        let t = Self.trackingName(s.cameraTracking)
+        if t != tracking { tracking = t }
         updateHint()
         boostIfUseful()
     }
 
     private func boostIfUseful() {
-        guard boostEnabled, phase == .capturing, !passCompleted, canShoot else { return }
+        guard boostEnabled, phase == .capturing, !passCompleted, trackingNormal else { return }
+        // Read live: the polled copy can be up to 0.2 s old.
+        guard let s = session, s.canRequestImageCapture else { return }
         guard degreesSinceShot >= boostMinDegrees,
               Date().timeIntervalSince(lastExtraShot) >= boostMinInterval else { return }
         guard maxShots == 0 || Double(shots) < Double(maxShots) * boostCeiling else { return }
@@ -182,7 +202,10 @@ final class CaptureModel: ObservableObject {
     }
 
     private func updateHint() {
-        let desired = GuidanceText.topHint(for: feedbackNames)
+        let capturing = phase == .capturing && !passCompleted
+        let desired = GuidanceText.topHint(for: feedbackNames,
+                                           tracking: phase == .initializing ? "normal" : tracking,
+                                           nearPhotoLimit: capturing && nearPhotoLimit)
         guard desired != hint else { return }
         // A new warning replaces "all good" right away; otherwise hold the current hint a moment.
         if hint == nil || Date().timeIntervalSince(hintChangedAt) >= hintHold {
@@ -201,6 +224,21 @@ final class CaptureModel: ObservableObject {
         case .completed: return .completed
         case .failed(let error): return .failed(error.localizedDescription)
         @unknown default: return .initializing
+        }
+    }
+
+    private static func trackingName(_ state: ARCamera.TrackingState) -> String {
+        switch state {
+        case .normal: return "normal"
+        case .notAvailable: return "notAvailable"
+        case .limited(let reason):
+            switch reason {
+            case .initializing: return "initializing"
+            case .excessiveMotion: return "excessiveMotion"
+            case .insufficientFeatures: return "insufficientFeatures"
+            case .relocalizing: return "relocalizing"
+            @unknown default: return "limited"
+            }
         }
     }
 }
@@ -222,6 +260,7 @@ struct CaptureView: View {
     @State private var showDebug = false
     @State private var confirmCancel = false
     @State private var closing = false
+    @State private var showTips = false
 
     var body: some View {
         ZStack {
@@ -242,9 +281,19 @@ struct CaptureView: View {
                 if stage == .finding, finder.objectFound {
                     FinderReadout(distance: finder.distance, sizeCM: finder.sizeCM)
                 }
-                if stage == .capture, let hint = visibleHint { HintPill(hint: hint) }
+                if stage == .capture, let hint = visibleHint {
+                    if hint.showsTips {
+                        Button { showTips = true } label: { HintPill(hint: hint) }
+                            .buttonStyle(.plain)
+                    } else {
+                        HintPill(hint: hint)
+                    }
+                }
                 if showDebug { debugPanel }
                 Spacer()
+                if stage == .capture, model.phase == .capturing, !model.passCompleted {
+                    PhotoRateControl(enabled: $model.boostEnabled, rate: $model.photoRate)
+                }
                 if stage == .capture, showsProgress {
                     CaptureProgressLine(shots: model.shots, maxShots: model.maxShots, extra: model.extraShots,
                                         pass: model.passNumber, completedPasses: model.completedPasses,
@@ -277,6 +326,14 @@ struct CaptureView: View {
             case .completed: complete()
             case .failed(let message): recordFailure(message)
             default: break
+            }
+        }
+        .sheet(isPresented: $showTips) {
+            NavigationStack {
+                TrackingTipsView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) { Button("Done") { showTips = false } }
+                    }
             }
         }
         .confirmationDialog("Discard this scan?", isPresented: $confirmCancel, titleVisibility: .visible) {
@@ -352,6 +409,13 @@ struct CaptureView: View {
             }
             .accessibilityLabel("Cancel scan")
             Spacer()
+            Button { showTips = true } label: {
+                Image(systemName: "questionmark")
+                    .font(.headline)
+                    .frame(width: 40, height: 40)
+                    .background(.black.opacity(0.5), in: Circle())
+            }
+            .accessibilityLabel("Tracking tips")
             Button { showDebug.toggle() } label: {
                 Image(systemName: showDebug ? "ladybug.fill" : "ladybug")
                     .font(.headline)
@@ -378,13 +442,10 @@ struct CaptureView: View {
                                   passCompleted: model.passCompleted, flipped: model.flipped,
                                   extraLines: [
                                     "boost: \(model.boostEnabled ? "on" : "off")  extra: \(model.extraShots)  canShoot: \(model.canShoot ? "yes" : "no")",
-                                    String(format: "turned since last extra: %.1f°", model.degreesSinceShot),
+                                    String(format: "turned since last extra: %.1f°  rate: %.2f", model.degreesSinceShot, model.photoRate),
+                                    AppSettings.rateDescription(model.photoRate),
+                                    "tracking: \(model.tracking)",
                                   ])
-                Toggle("Boost photos", isOn: $model.boostEnabled)
-                    .font(.footnote)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
             }
         }
     }

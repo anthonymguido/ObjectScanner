@@ -63,23 +63,44 @@ the same `.ipa`. Your scans are kept.
 3. The scan box appears around the object on its own (tap **Continue** if it doesn't).
    Adjust it if needed, then **Start capture**.
 4. Walk slowly all the way around, about one step a second. The app takes extra photos as you
-   turn, on top of the automatic ones, and the camera button takes one by hand.
+   turn, on top of the automatic ones, and the camera button takes one by hand. The **photo rate**
+   slider at the bottom (Fewer … More) sets how often the extra photos come. Each scan has a photo
+   limit, and a hint warns you when you're close to it.
 5. When a pass is done, choose **Another pass** (go around from a lower or higher angle),
    **Flip object** (lay it on its side to capture the bottom), or **Done**.
-6. The yellow hint under the instructions tells you what to fix: too close, too far,
-   too fast, too dark, or the object is out of view. Green means it's going well.
-7. On the scan's page, tap **Build 3D model**. Keep the app open and the phone unlocked.
-   It usually takes a few minutes.
+6. The yellow hint under the instructions tells you what to fix: tracking is weak or lost,
+   too close, too far, too fast, too dark, or the object is out of view. Green means it's going well.
+   Tap a tracking hint (or the **?** button) for tracking tips.
+7. On the scan's page, pick a **Quality** and tap **Build 3D model**. Keep the app open and the
+   phone unlocked.
+   - **Fast**: quickest, standard phone detail (how the app always built before).
+   - **Balanced**: looks harder for matching points between photos. Slower, fewer holes on plain objects.
+   - **Best (experimental)**: asks for full detail. iPhones may only allow standard detail; if so,
+     the app builds Balanced instead and says so on the scan's page.
 8. **View in 3D / AR** to inspect it, **Share model** to export the `.usdz`.
+9. **Export scan data** makes a `.zip` for building a more detailed model on a computer: the photos,
+   the LiDAR depth map from each photo (16-bit PNG, millimeters), the 3D point cloud (`pointcloud.ply`),
+   each photo's camera position (`poses.json`) and the model. A `README.txt` inside explains each file.
 
-The ladybug button on the capture screen shows the raw scanner state for testing, including the
-finder's readings and an on/off switch for the extra photos.
+The gear on the main screen opens **Settings**: photo rate, default build quality, tracking tips
+and the printable scan mat. The ladybug button on the capture screen shows the raw scanner state
+for testing, including the finder's readings and camera tracking.
+
+### Helping it keep track
+The scanner works out where the phone is by watching the things around the object. A plain table
+gives it little to follow, so it can lose its place. Give it marks around the object:
+- **Scan mat**: Settings → **Make scan mat (PDF)**. Print it at 100%, lay it flat, and put the object
+  in the dashed circle. Pick 4 pages for bigger objects and tape them together.
+- **Tape**: stick strips of matte masking tape around the object (not touching it) and draw a
+  different arrow, number or scribble on each one.
+- Don't move the mat or tape during a scan; flip the object, not the mat. The marks only help
+  tracking: the app cuts the object out when building, so they don't end up in the model.
 
 ### Tips for good models
 - Objects about the size of a shoe up to a chair work best.
 - Matte, textured objects scan best. Shiny, see-through or very thin objects scan badly.
 - Use bright, even light with no harsh shadows.
-- Put the object on a plain surface that contrasts with it, with room to walk all the way around.
+- Put the object on the scan mat or a surface with tape marks, with room to walk all the way around.
 - Do 2–3 passes, including one flipped, if the object can safely lie on its side.
 
 ---
