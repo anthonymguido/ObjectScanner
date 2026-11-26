@@ -100,25 +100,12 @@ final class Reconstructor: ObservableObject {
                 self.finishExportData(scanID, store: store, result: result)
 
             case .model(let quality):
-                var full = quality == .best
-                var result = await self.run(images: images, checkpoint: checkpoint,
+                // iOS only builds reduced detail; higher detail needs a computer (see Export scan data).
+                let result = await self.run(images: images, checkpoint: checkpoint,
                                             highSensitivity: quality.highFeatureSensitivity,
-                                            model: (url: modelURL, detail: full ? PhotogrammetrySession.Request.Detail.full : .reduced),
+                                            model: (url: modelURL, detail: PhotogrammetrySession.Request.Detail.reduced),
                                             pointCloudURL: pointCloudURL, posesURL: posesURL)
-                var note: String?
-                // Phones may only allow reduced detail. If full detail was refused, build reduced instead.
-                if full, !result.cancelled, !store.hasModel(scanID) {
-                    print("Full detail failed (\(result.modelFailure ?? "no model")), retrying at reduced detail")
-                    full = false
-                    self.fraction = 0
-                    self.secondsRemaining = nil
-                    self.stage = "Full detail isn't available here. Building at standard detail…"
-                    result = await self.run(images: images, checkpoint: checkpoint, highSensitivity: true,
-                                            model: (url: modelURL, detail: PhotogrammetrySession.Request.Detail.reduced), pointCloudURL: pointCloudURL, posesURL: posesURL)
-                    note = "This phone built at standard (reduced) detail. For full detail, export the scan data and build it on a computer."
-                }
-                let used = full ? "Best (full detail)" : quality == .best ? "Balanced (Best fell back)" : quality.title
-                self.finishModel(scanID, store: store, result: result, qualityUsed: used, note: note)
+                self.finishModel(scanID, store: store, result: result, qualityUsed: quality.title)
             }
         }
     }
@@ -196,14 +183,14 @@ final class Reconstructor: ObservableObject {
 
     // MARK: Finishing
 
-    private func finishModel(_ scanID: UUID, store: ScanStore, result: RunResult, qualityUsed: String, note: String?) {
+    private func finishModel(_ scanID: UUID, store: ScanStore, result: RunResult, qualityUsed: String) {
         let ok = store.hasModel(scanID) && !result.cancelled
         store.mutate(scanID) {
             if ok {
                 $0.status = .ready
                 $0.errorMessage = nil
                 $0.builtQuality = qualityUsed
-                $0.buildNote = note
+                $0.buildNote = nil
             } else {
                 $0.status = store.imageFiles(for: scanID).isEmpty ? .failed : .captured
                 $0.errorMessage = result.cancelled

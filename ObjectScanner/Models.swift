@@ -53,9 +53,9 @@ struct Scan: Identifiable, Codable, Hashable {
     var passes = 0
     var flipped = false
     var errorMessage: String?
-    /// How the current model was built, e.g. "Balanced".
+    /// How the current model was built, e.g. "Detailed".
     var builtQuality: String?
-    /// Something to know about the last build, e.g. that Best fell back to standard detail.
+    /// Something to know about the last build, shown on the scan's page.
     var buildNote: String?
 
     init(name: String) {

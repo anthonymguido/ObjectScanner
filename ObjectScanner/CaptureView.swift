@@ -48,6 +48,8 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var degreesSinceShot: Double = 0
     /// Camera tracking as text: "normal", "insufficientFeatures", "excessiveMotion", "relocalizing", ...
     @Published private(set) var tracking = "normal"
+    /// The session's tracking value exactly as it describes itself, for the debug panel.
+    @Published private(set) var trackingRaw = ""
 
     var trackingNormal: Bool { tracking == "normal" }
     /// True when the photo count is close to Apple's per-scan limit.
@@ -184,6 +186,8 @@ final class CaptureModel: ObservableObject {
 
         let names = s.feedback.map { String(describing: $0) }.sorted()
         if names != feedbackNames { feedbackNames = names }
+        let raw = String(describing: s.cameraTracking)
+        if raw != trackingRaw { trackingRaw = raw }
         let t = Self.trackingName(s.cameraTracking)
         if t != tracking { tracking = t }
         updateHint()
@@ -227,19 +231,15 @@ final class CaptureModel: ObservableObject {
         }
     }
 
-    private static func trackingName(_ state: ARCamera.TrackingState) -> String {
-        switch state {
-        case .normal: return "normal"
-        case .notAvailable: return "notAvailable"
-        case .limited(let reason):
-            switch reason {
-            case .initializing: return "initializing"
-            case .excessiveMotion: return "excessiveMotion"
-            case .insufficientFeatures: return "insufficientFeatures"
-            case .relocalizing: return "relocalizing"
-            @unknown default: return "limited"
-            }
+    /// Read as text, like the feedback, so the exact case names on each iOS version don't matter.
+    private static func trackingName(_ state: ObjectCaptureSession.Tracking) -> String {
+        let text = String(describing: state)
+        for name in ["insufficientFeatures", "excessiveMotion", "relocalizing", "initializing", "notAvailable"]
+        where text.localizedCaseInsensitiveContains(name) {
+            return name
         }
+        if text.localizedCaseInsensitiveContains("normal") { return "normal" }
+        return "limited"
     }
 }
 
@@ -444,7 +444,7 @@ struct CaptureView: View {
                                     "boost: \(model.boostEnabled ? "on" : "off")  extra: \(model.extraShots)  canShoot: \(model.canShoot ? "yes" : "no")",
                                     String(format: "turned since last extra: %.1f°  rate: %.2f", model.degreesSinceShot, model.photoRate),
                                     AppSettings.rateDescription(model.photoRate),
-                                    "tracking: \(model.tracking)",
+                                    "tracking: \(model.tracking)  raw: \(model.trackingRaw)",
                                   ])
             }
         }

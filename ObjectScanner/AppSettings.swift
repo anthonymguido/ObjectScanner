@@ -2,26 +2,23 @@ import Foundation
 
 /// How hard the phone works to build a model. Slower settings can give a better model.
 enum BuildQuality: String, CaseIterable, Identifiable, Codable {
-    case fast, balanced, best
+    case fast, detailed
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .fast: return "Fast"
-        case .balanced: return "Balanced"
-        case .best: return "Best (experimental)"
+        case .detailed: return "Detailed"
         }
     }
 
     var summary: String {
         switch self {
         case .fast:
-            return "Quickest build. Standard phone detail."
-        case .balanced:
-            return "Looks harder for matching points between photos. Slower, but fewer holes on plain or smooth objects."
-        case .best:
-            return "Asks the phone for full detail. If this phone only allows standard detail, it builds Balanced instead and says so."
+            return "Quickest build. iPhones build standard detail only; for more, use Export scan data and build on a computer."
+        case .detailed:
+            return "Looks harder for matching points between photos. Slower, but fewer holes on plain or smooth objects. Still standard phone detail."
         }
     }
 
