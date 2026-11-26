@@ -58,6 +58,130 @@ final class Reconstructor: ObservableObject {
         session?.cancel()
     }
 
+    // MARK: Tiled build test
+
+    /// Experiment: does building the object in 8 cropped pieces give more triangles per area than
+    /// one reduced build? Builds Tiles/tile_N.usdz and writes the triangle counts to the scan's note.
+    /// The normal model is not touched.
+    func tiledTest(_ scanID: UUID, store: ScanStore) {
+        guard prepare(scanID, store: store) else { return }
+        activeScanID = scanID
+        fraction = 0
+        secondsRemaining = nil
+        stage = "Tiled test: measuring the object…"
+        userCancelled = false
+        exportDataOnly = false
+        UIApplication.shared.isIdleTimerDisabled = true
+
+        let images = store.imagesURL(for: scanID)
+        let checkpoint = store.checkpointURL(for: scanID)
+        let tilesDir = store.tilesURL(for: scanID)
+        let modelURL = store.modelURL(for: scanID)
+        try? FileManager.default.removeItem(at: tilesDir)
+        try? FileManager.default.createDirectory(at: tilesDir, withIntermediateDirectories: true)
+
+        task = Task { [weak self] in
+            guard let self else { return }
+            let note = await self.runTiledTest(images: images, checkpoint: checkpoint, tilesDir: tilesDir, modelURL: modelURL)
+            store.mutate(scanID) { $0.buildNote = note }
+            self.reset()
+        }
+    }
+
+    private func runTiledTest(images: URL, checkpoint: URL, tilesDir: URL, modelURL: URL) async -> String {
+        do {
+            var configuration = PhotogrammetrySession.Configuration()
+            configuration.checkpointDirectory = checkpoint
+            configuration.isObjectMaskingEnabled = true
+            configuration.sampleOrdering = .sequential
+
+            // 1. The object's bounding box.
+            let boundsSession = try PhotogrammetrySession(input: images, configuration: configuration)
+            session = boundsSession
+            try boundsSession.process(requests: [.bounds])
+            var box: BoundingBox?
+            var failure: String?
+            loop: for try await output in boundsSession.outputs {
+                switch output {
+                case .requestProgress(_, let f): fraction = f
+                case .requestComplete(_, let result):
+                    if case .bounds(let b) = result { box = b }
+                case .requestError(_, let error): failure = error.localizedDescription
+                case .processingCancelled: return "Tiled test cancelled."
+                case .processingComplete: break loop
+                default: break
+                }
+            }
+            guard let box else { return "Tiled test: couldn't measure the object (\(failure ?? "no bounds"))." }
+            if userCancelled { return "Tiled test cancelled." }
+
+            // 2. Eight overlapping pieces, each built at reduced detail.
+            let tiles = Self.tileBoxes(box, divisions: 2, overlap: 0.1)
+            let urls = tiles.indices.map { tilesDir.appendingPathComponent("tile_\($0 + 1).usdz") }
+            let requests: [PhotogrammetrySession.Request] = zip(tiles, urls).map { tile, url in
+                .modelFile(url: url, detail: .reduced, geometry: PhotogrammetrySession.Request.Geometry(bounds: tile))
+            }
+            let tileSession = try PhotogrammetrySession(input: images, configuration: configuration)
+            session = tileSession
+            try tileSession.process(requests: requests)
+            var done = 0
+            var errors: [String] = []
+            fraction = 0
+            stage = "Tiled test: building piece 1 of \(tiles.count)…"
+            loop2: for try await output in tileSession.outputs {
+                switch output {
+                case .requestProgress(_, let f):
+                    fraction = (Double(done) + f) / Double(tiles.count)
+                case .requestProgressInfo(_, let info):
+                    secondsRemaining = info.estimatedRemainingTime
+                case .requestComplete(_, _):
+                    done += 1
+                    stage = "Tiled test: building piece \(min(done + 1, tiles.count)) of \(tiles.count)…"
+                case .requestError(_, let error):
+                    done += 1
+                    errors.append(error.localizedDescription)
+                case .processingCancelled: return "Tiled test cancelled."
+                case .processingComplete: break loop2
+                default: break
+                }
+            }
+            session = nil
+
+            // 3. Compare triangle counts.
+            stage = "Tiled test: counting triangles…"
+            let counts = urls.map { MeshIO.triangleCount(of: $0) }
+            let total = counts.compactMap { $0 }.reduce(0, +)
+            let normal = MeshIO.triangleCount(of: modelURL)
+            let size = box.max - box.min
+            var lines = [String(format: "Tiled test (object %.0f × %.0f × %.0f cm):", size.x * 100, size.y * 100, size.z * 100)]
+            lines.append("Normal model: \(normal.map { "\($0.formatted()) triangles" } ?? "not built")")
+            lines.append("8 pieces: " + counts.map { $0.map { $0.formatted() } ?? "–" }.joined(separator: ", "))
+            lines.append("Pieces total: \(total.formatted()) triangles" +
+                         (normal.map { $0 > 0 ? String(format: " (%.1f× the normal model)", Double(total) / Double($0)) : "" } ?? ""))
+            if !errors.isEmpty { lines.append("Errors: " + Set(errors).joined(separator: "; ")) }
+            return lines.joined(separator: "\n")
+        } catch {
+            session = nil
+            return "Tiled test failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Splits a box into divisions³ pieces, each grown by `overlap` (a share of the piece size) on every side.
+    private static func tileBoxes(_ box: BoundingBox, divisions: Int, overlap: Float) -> [BoundingBox] {
+        let step = (box.max - box.min) / Float(divisions)
+        let pad = step * overlap
+        var result: [BoundingBox] = []
+        for x in 0..<divisions {
+            for y in 0..<divisions {
+                for z in 0..<divisions {
+                    let lo = box.min + step * SIMD3(Float(x), Float(y), Float(z))
+                    result.append(BoundingBox(min: lo - pad, max: lo + step + pad))
+                }
+            }
+        }
+        return result
+    }
+
     private var exportCompletion: ((Bool) -> Void)?
 
     // MARK: Running

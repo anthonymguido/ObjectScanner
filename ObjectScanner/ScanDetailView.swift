@@ -13,6 +13,13 @@ struct ScanDetailView: View {
     @AppStorage(AppSettings.Key.buildQuality) private var quality = BuildQuality.fast
     @State private var exporting = false
     @State private var exportError: String?
+    @AppStorage("printResin") private var printResin = false
+    @AppStorage("printKeepBase") private var printKeepBase = false
+    @AppStorage("printCustomSize") private var printCustomSize = false
+    @AppStorage("printSizeMM") private var printSizeMM = 100.0
+    @State private var printing = false
+    @State private var printStage = ""
+    @State private var printResult: String?
 
     private var scan: Scan? { store.scan(scanID) }
     private var isBuildingThis: Bool { reconstructor.activeScanID == scanID }
@@ -40,7 +47,7 @@ struct ScanDetailView: View {
                     }
                 }
 
-                if let note = scan.buildNote, store.hasModel(scanID), !isBuildingThis {
+                if let note = scan.buildNote, !isBuildingThis {
                     Section {
                         Label(note, systemImage: "info.circle")
                             .font(.subheadline)
@@ -61,7 +68,9 @@ struct ScanDetailView: View {
                 }
 
                 modelSection(scan)
+                printSection(scan)
                 exportSection(scan)
+                experimentsSection(scan)
                 photosSection(scan)
             }
             .navigationTitle(scan.name)
@@ -143,6 +152,63 @@ struct ScanDetailView: View {
     }
 
     @ViewBuilder
+    private func printSection(_ scan: Scan) -> some View {
+        if store.hasModel(scanID) && !isBuildingThis {
+            Section {
+                Picker("Printer", selection: $printResin) {
+                    Text("Filament (FDM)").tag(false)
+                    Text("Resin (finer)").tag(true)
+                }
+                Toggle("Keep base / table", isOn: $printKeepBase)
+                Toggle("Custom size", isOn: $printCustomSize)
+                if printCustomSize {
+                    HStack {
+                        Text("Longest side")
+                        Spacer()
+                        TextField("mm", value: $printSizeMM, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                        Text("mm")
+                    }
+                }
+                Button { makePrintFile(scan) } label: {
+                    HStack {
+                        Label("Make print file (.stl)", systemImage: "printer.filled.and.paper")
+                        if printing { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(printing)
+                if printing {
+                    Text(printStage).font(.footnote).foregroundStyle(.secondary)
+                } else if let printResult {
+                    Text(printResult).font(.footnote).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("3D printing")
+            } footer: {
+                Text("Makes a solid, watertight STL: removes the table and loose bits, closes holes, flattens the bottom and sizes it in millimeters. Turn on Keep base for pieces that stand on their own base. Takes up to a minute.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func experimentsSection(_ scan: Scan) -> some View {
+        if scan.imageCount > 0 && !isBuildingThis {
+            Section {
+                Button { reconstructor.tiledTest(scanID, store: store) } label: {
+                    Label("Tiled build test", systemImage: "square.grid.3x3")
+                }
+                .disabled(reconstructor.isRunning)
+            } header: {
+                Text("Experiments")
+            } footer: {
+                Text("Builds the object in 8 overlapping pieces and compares their triangle count with the normal model, to see whether it can give more detail. Your model isn't changed. Takes several times as long as a normal build.")
+            }
+        }
+    }
+
+    @ViewBuilder
     private func exportSection(_ scan: Scan) -> some View {
         if scan.imageCount > 0 && !isBuildingThis {
             Section {
@@ -179,6 +245,37 @@ struct ScanDetailView: View {
         guard let url = store.shareableModelURL(for: scanID) else { return }
         shareItems = [url]
         sharing = true
+    }
+
+    private func makePrintFile(_ scan: Scan) {
+        printing = true
+        printResult = nil
+        printStage = "Starting…"
+        let model = store.modelURL(for: scanID)
+        let safe = scan.name.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("print-\(scanID.uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let output = dir.appendingPathComponent("\(safe.isEmpty ? "model" : safe).stl")
+        let options = PrintExporter.Options(resin: printResin, keepBase: printKeepBase,
+                                            targetSizeMM: printCustomSize ? Float(printSizeMM) : nil)
+        Task {
+            let result: Result<PrintExporter.Report, Error> = await Task.detached(priority: .userInitiated) {
+                Result {
+                    try PrintExporter.makePrintFile(model: model, output: output, options: options) { text in
+                        Task { @MainActor in printStage = text }
+                    }
+                }
+            }.value
+            printing = false
+            switch result {
+            case .success(let report):
+                printResult = report.summary
+                shareItems = [output]
+                sharing = true
+            case .failure(let error):
+                printResult = "Couldn't make the print file: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func exportData() {

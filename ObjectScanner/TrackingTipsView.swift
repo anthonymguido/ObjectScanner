@@ -24,6 +24,12 @@ struct TrackingTipsView: View {
                 tip("lightbulb", "Bright, even light helps tracking as much as it helps the model.")
             }
 
+            Section("For 3D printing") {
+                tip("camera.badge.ellipsis", "Turn the photo rate up and do 3 passes, including one with the object flipped, so the bottom isn't a guess.")
+                tip("light.max", "Soft, even light from several sides. Sharp, well-lit photos are where the detail comes from.")
+                tip("printer.filled.and.paper", "On the scan's page, use Make print file. It removes the table, closes holes and flattens the bottom.")
+            }
+
             Section {
                 Text("The marks only help tracking. The app cuts the object out of its surroundings when building the model, so the mat and tape don't end up in it.")
                     .font(.footnote)

@@ -83,6 +83,12 @@ the same `.ipa`. Your scans are kept.
    the LiDAR depth map from each photo (16-bit PNG, millimeters), the 3D point cloud (`pointcloud.ply`),
    each photo's camera position (`poses.json`) and the model. A `README.txt` inside explains each file.
 
+10. **Make print file (.stl)** (under 3D printing on the scan's page) makes a solid, watertight STL
+    for your slicer: it removes the table and loose bits, closes holes, flattens the bottom and sizes
+    it in millimeters (real size, or set the longest side). Choose **Resin** for a finer result, and
+    turn on **Keep base / table** for pieces that stand on their own base.
+11. **Experiments → Tiled build test** builds the object in 8 overlapping pieces and shows on the
+    scan's page whether that gives more triangles than the normal model. Your model isn't changed.
 The gear on the main screen opens **Settings**: photo rate, default build quality, tracking tips
 and the printable scan mat. The ladybug button on the capture screen shows the raw scanner state
 for testing, including the finder's readings and camera tracking.

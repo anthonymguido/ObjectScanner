@@ -62,6 +62,8 @@ final class ScanStore: ObservableObject {
     func modelURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("model.usdz") }
     func pointCloudURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("pointcloud.ply") }
     func posesURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("poses.json") }
+    func tilesURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("Tiles", isDirectory: true) }
+    func printURL(for id: UUID) -> URL { folder(for: id).appendingPathComponent("print.stl") }
 
     /// True when the point cloud and poses for an export already exist.
     func hasExportData(_ id: UUID) -> Bool {
