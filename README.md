@@ -74,9 +74,10 @@ the same `.ipa`. Your scans are kept.
 7. On the scan's page, pick a **Quality** and tap **Build 3D model**. Keep the app open and the
    phone unlocked.
    - **Fast**: quickest, standard phone detail (how the app always built before).
-   - **Balanced**: looks harder for matching points between photos. Slower, fewer holes on plain objects.
-   - **Best (experimental)**: asks for full detail. iPhones may only allow standard detail; if so,
-     the app builds Balanced instead and says so on the scan's page.
+   - **Detailed**: looks harder for matching points between photos. Slower, fewer holes on plain objects.
+
+   iPhones only build standard ("reduced") detail. For a more detailed model, use **Export scan data**
+   and build it on a computer.
 8. **View in 3D / AR** to inspect it, **Share model** to export the `.usdz`.
 9. **Export scan data** makes a `.zip` for building a more detailed model on a computer: the photos,
    the LiDAR depth map from each photo (16-bit PNG, millimeters), the 3D point cloud (`pointcloud.ply`),
